@@ -1,98 +1,128 @@
-import os
-import sys
 import argparse
+import os
 import requests
+import re
+import warnings
 
-def download_apk(package_name, saveinfo, path):
-    url = "https://api-apk.evozi.com/download"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:134.0) Gecko/20100101 Firefox/134.0",
-        "Accept": "application/json, text/javascript, */*; q=0.01",
-        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-        "Origin": "https://apps.evozi.com",
-        "Referer": "https://apps.evozi.com/",
-    }
-    data = {
-        "caabcbcdfabcaffac": "1737348414",
-        "bbdeafcaaeeddfd": package_name,
-        "badcbcacacaadc": "UBQGe7U86onw2D22x37HjQ",
-        "fetch": "false",
-    }
+# Ignorar avisos relacionados a SSL não verificado
+warnings.filterwarnings("ignore", message="Unverified HTTPS request")
 
-    print(f"Fetching download link for {package_name}...")
-    response = requests.post(url, headers=headers, data=data)
+def fetch_response(url, proxy=None):
+    try:
+        proxies = {"http": proxy, "https": proxy} if proxy else None
+        response = requests.get(url, proxies=proxies, verify=False)
+        response.raise_for_status()
+        return response.text
+    except requests.RequestException as e:
+        print(f"Error: Unable to fetch data from {url}: {e}")
+        exit(1)
 
-    if response.status_code != 200:
-        print(f"Failed to fetch APK information for {package_name}: HTTP {response.status_code}")
-        return False
+def extract_tokens(response):
+    ca_token = re.search(r'caabcbcdfabcaffac\s*:\s*(\d+)', response)
+    bad_token_key = re.search(r'badcbcacacaadc\s*:\s*([\w]+)', response)
+    if not ca_token or not bad_token_key:
+        print("Error: Unable to extract session tokens.")
+        exit(1)
 
-    response_data = response.json()
-    if response_data.get("status") != "success" or not response_data.get("url"):
-        print(f"Error: Unable to download APK for {package_name}. The link was not provided.")
-        return False
+    bad_token_key = bad_token_key.group(1)
+    bad_token_value_match = re.search(rf'var\s+{bad_token_key}\s*=\s*\'(.*?)\'', response)
+    if not bad_token_value_match:
+        print(f"Error: Unable to extract value for {bad_token_key}.")
+        exit(1)
 
-    apk_url = "https:" + response_data["url"].replace("\\", "")
-    app_info = {
-        "packagename": response_data.get("packagename"),
-        "filesize": response_data.get("filesize"),
-        "sha1": response_data.get("sha1"),
-        "version": response_data.get("version"),
-        "fetched_at": response_data.get("fetched_at"),
-    }
+    bad_token_value = bad_token_value_match.group(1)
+    return ca_token.group(1), bad_token_value
 
-    package_dir = path if path else package_name
-    os.makedirs(package_dir, exist_ok=True)
+def post_request(url, data, proxy=None):
+    try:
+        proxies = {"http": proxy, "https": proxy} if proxy else None
+        response = requests.post(url, data=data, proxies=proxies, headers={
+            "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"
+        }, verify=False)
+        response.raise_for_status()
+        return response.json()
+    except requests.RequestException as e:
+        print(f"Error: Unable to send POST request: {e}")
+        exit(1)
 
-    apk_path = os.path.join(package_dir, f"{package_name}.apk")
+def download_file(url, output_path, proxy=None):
+    try:
+        proxies = {"http": proxy, "https": proxy} if proxy else None
+        response = requests.get(url, proxies=proxies, stream=True, verify=False)
+        response.raise_for_status()
+        with open(output_path, 'wb') as f:
+            for chunk in response.iter_content(chunk_size=8192):
+                f.write(chunk)
+        print(f"APK downloaded successfully to: {output_path}")
+    except requests.RequestException as e:
+        print(f"Error: Failed to download APK: {e}")
+        exit(1)
 
-    print(f"Downloading APK to {apk_path}...")
-    apk_response = requests.get(apk_url, stream=True)
-    if apk_response.status_code == 200:
-        with open(apk_path, "wb") as apk_file:
-            for chunk in apk_response.iter_content(chunk_size=1024):
-                apk_file.write(chunk)
-        print(f"APK downloaded successfully to {apk_path}")
-    else:
-        print(f"Error: Failed to download APK for {package_name}.")
-        return False
+def save_info(info, output_path):
+    try:
+        with open(output_path, 'w') as f:
+            for key, value in info.items():
+                f.write(f"{key}: {value}\n")
+        print(f"App information saved to: {output_path}")
+    except IOError as e:
+        print(f"Error: Unable to save app information: {e}")
+        exit(1)
 
-    if saveinfo:
-        info_path = os.path.join(package_dir, "info.txt")
-        print(f"Saving app information to {info_path}...")
-        with open(info_path, "w") as info_file:
-            for key, value in app_info.items():
-                info_file.write(f"{key}: {value}\n")
-        print("App information saved successfully.")
-
-    return True
-
-def process_package_list(file_path, saveinfo, path):
-    if not os.path.isfile(file_path):
-        print(f"Error: File {file_path} does not exist.")
-        sys.exit(1)
-
-    with open(file_path, "r") as f:
-        packages = [line.strip() for line in f if line.strip()]
-
-    for package_name in packages:
-        print(f"Processing package: {package_name}")
-        success = download_apk(package_name, saveinfo, path)
-        if not success:
-            print(f"Failed to process package: {package_name}")
-
-if __name__ == "__main__":
+def main():
     parser = argparse.ArgumentParser(description="APK Downloader Script")
-    parser.add_argument("package_name", nargs="?", help="Package name of the app (e.g., com.example)")
-    parser.add_argument("-list", help="Path to a file containing a list of package names, one per line")
-    parser.add_argument("-saveinfo", action="store_true", help="Save app information to a file")
-    parser.add_argument("-path", help="Base path to save the APK and app information", default=None)
+    parser.add_argument("-pkg", required=True, help="Package name")
+    parser.add_argument("-saveinfo", action="store_true", help="Save app information")
+    parser.add_argument("-path", help="Output path for APK and info file")
+    parser.add_argument("-proxy", help="Proxy URL (http://proxy:port)")
 
     args = parser.parse_args()
 
-    if args.list:
-        process_package_list(args.list, args.saveinfo, args.path)
-    elif args.package_name:
-        download_apk(args.package_name, args.saveinfo, args.path)
-    else:
-        print("Error: You must provide either a package name or a list of package names.")
-        sys.exit(1)
+    base_url = f"https://apps.evozi.com/apk-downloader/?id={args.pkg}"
+    response = fetch_response(base_url, args.proxy)
+
+    ca_token, bad_token = extract_tokens(response)
+
+    post_url = "https://api-apk.evozi.com/download"
+    post_data = {
+        "caabcbcdfabcaffac": ca_token,
+        "bbdeafcaaeeddfd": args.pkg,
+        "badcbcacacaadc": bad_token,
+        "fetch": "false"
+    }
+
+    download_response = post_request(post_url, post_data, args.proxy)
+
+    apk_url = download_response.get("url")
+    if not apk_url:
+        print("Error: Unable to retrieve APK download link.")
+        exit(1)
+
+    apk_url = f"https:{apk_url.replace('\\', '')}"
+
+    package_name = download_response.get("packagename", "unknown")
+    file_size = download_response.get("filesize", "unknown")
+    sha1 = download_response.get("sha1", "unknown")
+    version = download_response.get("version", "unknown")
+    fetched_at = download_response.get("fetched_at", "unknown")
+
+    # Define a pasta de saída com o nome do pacote
+    output_dir = args.path if args.path else "."
+    package_dir = os.path.join(output_dir, package_name)
+    os.makedirs(package_dir, exist_ok=True)
+
+    # Caminho para salvar o APK e as informações
+    apk_output = os.path.join(package_dir, f"{package_name}.apk")
+    download_file(apk_url, apk_output, args.proxy)
+
+    if args.saveinfo:
+        info_output = os.path.join(package_dir, "info.txt")
+        save_info({
+            "Package Name": package_name,
+            "File Size": file_size,
+            "SHA1": sha1,
+            "Version": version,
+            "Fetched At": fetched_at
+        }, info_output)
+
+if __name__ == "__main__":
+    main()
