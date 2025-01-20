@@ -97,7 +97,7 @@ def main():
         print("Error: Unable to retrieve APK download link.")
         exit(1)
 
-    apk_url = f"https:{apk_url.replace('\\', '')}"
+    apk_url = "https:" + apk_url.replace("\\", "")
 
     package_name = download_response.get("packagename", "unknown")
     file_size = download_response.get("filesize", "unknown")
