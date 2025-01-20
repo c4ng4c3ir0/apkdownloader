@@ -4,7 +4,6 @@ import requests
 import re
 import warnings
 
-# Ignorar avisos relacionados a SSL não verificado
 warnings.filterwarnings("ignore", message="Unverified HTTPS request")
 
 def fetch_response(url, proxy=None):
@@ -105,12 +104,10 @@ def main():
     version = download_response.get("version", "unknown")
     fetched_at = download_response.get("fetched_at", "unknown")
 
-    # Define a pasta de saída com o nome do pacote
     output_dir = args.path if args.path else "."
     package_dir = os.path.join(output_dir, package_name)
     os.makedirs(package_dir, exist_ok=True)
 
-    # Caminho para salvar o APK e as informações
     apk_output = os.path.join(package_dir, f"{package_name}.apk")
     download_file(apk_url, apk_output, args.proxy)
 
